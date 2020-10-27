@@ -19,9 +19,9 @@ from distortion import Distortion
 def distortion_impulse_response():
     # show impulse response of distortion with different hardness
     x = np.linspace(-1.5, 1.5, 1000, dtype=np.float32)
-    for N in range(0, 6):
-        audio_gen = Distortion(scale_fn=None, hardness=N)(x, 0.5 * np.ones((1, 1), dtype=np.float32)).numpy().squeeze()
-        plt.plot(x, audio_gen, label=str(N))
+    for gain in range(0, 21, 2):
+        audio_gen = Distortion(scale_fn=None)(x, gain * np.ones((1, 1), dtype=np.float32)).numpy().squeeze()
+        plt.plot(x, audio_gen, label=str(gain))
     plt.legend()
     plt.show()
     plt.close()
@@ -32,25 +32,26 @@ def distortion_test(audio_file, sample_rate):
         audio = audio_bytes_to_np(f.read(), sample_rate=sample_rate)
     audio = audio[np.newaxis, :].astype(np.float32)
 
-    # apply effect to supplied audio
-    audio_gen = Distortion(scale_fn=None, hardness=2)(audio, thresh).numpy().squeeze()
+    for gain in range(0, 31, 5):
+        # apply effect to supplied audio
+        audio_gen = Distortion(scale_fn=None)(audio, gain * np.ones((1, 1), dtype=np.float32)).numpy().squeeze()
 
-    # plot spectrograms before and after
-    fig, ax = plt.subplots(2, 1)
-    librosa.display.specshow(
-        librosa.power_to_db(librosa.feature.melspectrogram(y=audio.squeeze(), sr=sample_rate), ref=np.max), ax=ax[0]
-    )
-    librosa.display.specshow(
-        librosa.power_to_db(librosa.feature.melspectrogram(y=audio_gen, sr=sample_rate), ref=np.max), ax=ax[1]
-    )
-    plt.show()
-    plt.close()
+        # plot spectrograms before and after
+        fig, ax = plt.subplots(2, 1)
+        librosa.display.specshow(
+            librosa.power_to_db(librosa.feature.melspectrogram(y=audio.squeeze(), sr=sample_rate), ref=np.max), ax=ax[0]
+        )
+        librosa.display.specshow(
+            librosa.power_to_db(librosa.feature.melspectrogram(y=audio_gen, sr=sample_rate), ref=np.max), ax=ax[1]
+        )
+        plt.show()
+        plt.close()
 
-    # write processed wav
-    normalizer = float(np.iinfo(np.int16).max)
-    array_of_ints = np.array(audio_gen * normalizer, dtype=np.int16)
-    output_name = audio_file.split("/")[-1].split(".")[0] + "_clip_" + str(thresh) + ".wav"
-    wavfile.write(output_name, sample_rate, array_of_ints)
+        # write processed wav
+        normalizer = float(np.iinfo(np.int16).max)
+        array_of_ints = np.array(audio_gen * normalizer, dtype=np.int16)
+        output_name = audio_file.split("/")[-1].split(".")[0] + "_gain_" + str(gain) + ".wav"
+        wavfile.write(output_name, sample_rate, array_of_ints)
 
 
 if __name__ == "__main__":

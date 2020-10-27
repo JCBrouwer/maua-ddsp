@@ -17,6 +17,9 @@ import argparse
 import glob
 import os
 
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
+import tensorflow as tf
+
 from ddsp.colab import colab_utils
 import ddsp.training
 from ddsp.training.data_preparation import prepare_tfrecord_lib
@@ -50,12 +53,12 @@ if not glob.glob(tfrecord_pattern):
         pipeline_options="",
     )
 
-if not glob.glob(os.path.join(args.save_dir, "dataset_statistics.pkl")):
+if not glob.glob(os.path.join(args.audio_dir, "dataset_statistics.pkl")):
     data_provider = ddsp.training.data.TFRecordProvider(
         tfrecord_pattern, example_secs=args.example_secs, frame_rate=args.frame_rate, sample_rate=args.sr,
     )
     dataset = data_provider.get_dataset(shuffle=False)
-    colab_utils.save_dataset_statistics(data_provider, os.path.join(args.save_dir, "dataset_statistics.pkl"))
+    colab_utils.save_dataset_statistics(data_provider, os.path.join(args.audio_dir, "dataset_statistics.pkl"))
 
 
 data_provider = ddsp.training.data.TFRecordProvider(
