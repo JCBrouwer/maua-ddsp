@@ -34,7 +34,7 @@ python timbre_transfer.py \
   --audio AUDIO \
   --ckpt CKPT \
   --sr SR \
-  --no_adjust \
+  --no_adjust # usually want to adjust \
   --threshold THRESHOLD \
   --quiet QUIET \
   --autotune AUTOTUNE \
