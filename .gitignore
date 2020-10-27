@@ -1,1 +1,5 @@
 ddsp/
+*.wav
+.vscode/
+__pycache__/
+*.pyc

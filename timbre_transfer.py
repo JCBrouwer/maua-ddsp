@@ -13,14 +13,17 @@
 # limitations under the License.
 # ==============================================================================
 
-# Ignore a bunch of deprecation warnings
 import warnings
 
 warnings.filterwarnings("ignore")
-
-import copy
 import os
+
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
+import tensorflow as tf
+import copy
 import time
+import glob
+import argparse
 
 import crepe
 import ddsp
@@ -31,25 +34,36 @@ from ddsp.colab.colab_utils import (
     detect_notes,
     fit_quantile_transform,
     get_tuning_factor,
-    download,
-    play,
-    record,
+    audio_bytes_to_np,
     specplot,
-    upload,
+    play,
     DEFAULT_SAMPLE_RATE,
 )
 import gin
 from google.colab import files
 import librosa
+import librosa.display
 import matplotlib.pyplot as plt
 import numpy as np
+from scipy.io import wavfile
 import pickle
 import tensorflow.compat.v2 as tf
 import tensorflow_datasets as tfds
 
-sample_rate = DEFAULT_SAMPLE_RATE  # 16000
+parser = argparse.ArgumentParser()
+parser.add_argument("--audio", type=str, required=True)
+parser.add_argument("--ckpt", type=str, required=True)
+parser.add_argument("--sr", type=int, default=DEFAULT_SAMPLE_RATE)
+parser.add_argument("--no_adjust", action="store_true")
+parser.add_argument("--threshold", type=float, default=1)  # 0 - 2
+parser.add_argument("--quiet", type=float, default=30)  # 0 - 60
+parser.add_argument("--autotune", type=float, default=0)  # 0 - 1
+parser.add_argument("--pitch_shift", type=int, default=0)  # -2 - 2
+parser.add_argument("--loudness_shift", type=float, default=0)  # -20 - 20
+args = parser.parse_args()
 
-# load audio here
+with open(args.audio, "rb") as f:
+    audio = audio_bytes_to_np(f.read(), sample_rate=args.sr)
 audio = audio[np.newaxis, :]
 print("\nExtracting audio features...")
 
@@ -63,48 +77,45 @@ audio_features["loudness_db"] = audio_features["loudness_db"].astype(np.float32)
 audio_features_mod = None
 print("Audio features took %.1f seconds" % (time.time() - start_time))
 
-TRIM = -15
+trim = -15
 # Plot Features.
-fig, ax = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(6, 8))
-ax[0].plot(audio_features["loudness_db"][:TRIM])
-ax[0].set_ylabel("loudness_db")
+# fig, ax = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(6, 8))
+# ax[0].plot(audio_features["loudness_db"][:trim])
+# ax[0].set_ylabel("loudness_db")
 
-ax[1].plot(librosa.hz_to_midi(audio_features["f0_hz"][:TRIM]))
-ax[1].set_ylabel("f0 [midi]")
+# ax[1].plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
+# ax[1].set_ylabel("f0 [midi]")
 
-ax[2].plot(audio_features["f0_confidence"][:TRIM])
-ax[2].set_ylabel("f0 confidence")
-_ = ax[2].set_xlabel("Time step [frame]")
+# ax[2].plot(audio_features["f0_confidence"][:trim])
+# ax[2].set_ylabel("f0 confidence")
+# _ = ax[2].set_xlabel("Time step [frame]")
+# plt.show()
+# plt.close()
 
-
-def find_model_dir(dir_name):
-    # Iterate through directories until model directory is found
-    for root, dirs, filenames in os.walk(dir_name):
-        for filename in filenames:
-            if filename.endswith(".gin") and not filename.startswith("."):
-                model_dir = root
-                break
-    return model_dir
-
-
-model_dir = find_model_dir(args.model_dir)
+# Iterate through directories until model directory is found
+for root, dirs, filenames in os.walk("/".join(args.ckpt.split("/")[:-1])):
+    for filename in filenames:
+        if filename.endswith(".gin") and not filename.startswith("."):
+            model_dir = root
+            break
 gin_file = glob.glob(model_dir + "/*.gin")[0]
 
 # Load the dataset statistics.
-DATASET_STATS = None
+dataset_stats = None
 dataset_stats_file = os.path.join(model_dir, "dataset_statistics.pkl")
 print(f"Loading dataset statistics from {dataset_stats_file}")
 with open(dataset_stats_file, "rb") as f:
-    DATASET_STATS = pickle.load(f)
+    dataset_stats = pickle.load(f)
 
 # Parse gin config,
 with gin.unlock_config():
     gin.parse_config_file(gin_file, skip_unknown=True)
 
-# Assumes only one checkpoint in the folder, 'ckpt-[iter]`.
-ckpt_files = [f for f in tf.io.gfile.listdir(model_dir) if "ckpt" in f]
-ckpt_name = ckpt_files[0].split(".")[0]
-ckpt = os.path.join(model_dir, ckpt_name)
+# ckpt_files = sorted([f for f in tf.io.gfile.listdir(model_dir) if "ckpt" in f])
+# ckpt_name = ckpt_files[-1].split(".")[0]
+# ckpt = os.path.join(model_dir, ckpt_name)
+ckpt = args.ckpt
+print("Loading: ", ckpt)
 
 # Ensure dimensions and sampling rates are equal
 time_steps_train = gin.query_parameter("DefaultPreprocessor.time_steps")
@@ -147,30 +158,7 @@ start_time = time.time()
 _ = model(audio_features, training=False)
 print("Restoring model took %.1f seconds" % (time.time() - start_time))
 
-threshold = 1.0  # 0 - 2
-
-# @markdown ## Automatic
-
-ADJUST = True  # @param{type:"boolean"}
-
-# @markdown Quiet parts without notes detected (dB)
-quiet = 24  # @param {type:"slider", min: 0, max:60, step:1}
-
-# @markdown Force pitch to nearest note (amount)
-autotune = 0.6  # @param {type:"slider", min: 0.0, max:1.0, step:0.1}
-
-# @markdown ## Manual
-
-
-# @markdown Shift the pitch (octaves)
-pitch_shift = -2  # @param {type:"slider", min:-2, max:2, step:1}
-
-# @markdown Adjsut the overall loudness (dB)
-loudness_shift = 15  # @param {type:"slider", min:-20, max:20, step:1}
-
-
 audio_features_mod = {k: v.copy() for k, v in audio_features.items()}
-
 
 ## Helper functions.
 def shift_ld(audio_features, ld_shift=0.0):
@@ -188,13 +176,15 @@ def shift_f0(audio_features, pitch_shift=0.0):
 
 mask_on = None
 
-if ADJUST and DATASET_STATS is not None:
+if not args.no_adjust and dataset_stats is not None:
     # Detect sections that are "on".
-    mask_on, note_on_value = detect_notes(audio_features["loudness_db"], audio_features["f0_confidence"], threshold)
+    mask_on, note_on_value = detect_notes(
+        audio_features["loudness_db"], audio_features["f0_confidence"], args.threshold
+    )
 
     if np.any(mask_on):
         # Shift the pitch register.
-        target_mean_pitch = DATASET_STATS["mean_pitch"]
+        target_mean_pitch = dataset_stats["mean_pitch"]
         pitch = ddsp.core.hz_to_midi(audio_features["f0_hz"])
         mean_pitch = np.mean(pitch[mask_on])
         p_diff = target_mean_pitch - mean_pitch
@@ -205,21 +195,21 @@ if ADJUST and DATASET_STATS is not None:
 
         # Quantile shift the note_on parts.
         _, loudness_norm = colab_utils.fit_quantile_transform(
-            audio_features["loudness_db"], mask_on, inv_quantile=DATASET_STATS["quantile_transform"]
+            audio_features["loudness_db"], mask_on, inv_quantile=dataset_stats["quantile_transform"]
         )
 
         # Turn down the note_off parts.
         mask_off = np.logical_not(mask_on)
-        loudness_norm[mask_off] -= quiet * (1.0 - note_on_value[mask_off][:, np.newaxis])
+        loudness_norm[mask_off] -= args.quiet * (1.0 - note_on_value[mask_off][:, np.newaxis])
         loudness_norm = np.reshape(loudness_norm, audio_features["loudness_db"].shape)
 
         audio_features_mod["loudness_db"] = loudness_norm
 
         # Auto-tune.
-        if autotune:
+        if args.autotune:
             f0_midi = np.array(ddsp.core.hz_to_midi(audio_features_mod["f0_hz"]))
             tuning_factor = get_tuning_factor(f0_midi, audio_features_mod["f0_confidence"], mask_on)
-            f0_midi_at = auto_tune(f0_midi, tuning_factor, mask_on, amount=autotune)
+            f0_midi_at = auto_tune(f0_midi, tuning_factor, mask_on, amount=args.autotune)
             audio_features_mod["f0_hz"] = ddsp.core.midi_to_hz(f0_midi_at)
 
     else:
@@ -229,36 +219,36 @@ else:
     print("\nSkipping auto-adujst (box not checked or no dataset statistics found).")
 
 # Manual Shifts.
-audio_features_mod = shift_ld(audio_features_mod, loudness_shift)
-audio_features_mod = shift_f0(audio_features_mod, pitch_shift)
+audio_features_mod = shift_ld(audio_features_mod, args.loudness_shift)
+audio_features_mod = shift_f0(audio_features_mod, args.pitch_shift)
 
 # Plot Features.
-has_mask = int(mask_on is not None)
-n_plots = 3 if has_mask else 2
-fig, axes = plt.subplots(nrows=n_plots, ncols=1, sharex=True, figsize=(2 * n_plots, 8))
+# has_mask = int(mask_on is not None)
+# n_plots = 3 if has_mask else 2
+# fig, axes = plt.subplots(nrows=n_plots, ncols=1, sharex=True, figsize=(2 * n_plots, 8))
 
-if has_mask:
-    ax = axes[0]
-    ax.plot(np.ones_like(mask_on[:TRIM]) * threshold, "k:")
-    ax.plot(note_on_value[:TRIM])
-    ax.plot(mask_on[:TRIM])
-    ax.set_ylabel("Note-on Mask")
-    ax.set_xlabel("Time step [frame]")
-    ax.legend(["Threshold", "Likelihood", "Mask"])
+# if has_mask:
+#     ax = axes[0]
+#     ax.plot(np.ones_like(mask_on[:trim]) * args.threshold, "k:")
+#     ax.plot(note_on_value[:trim])
+#     ax.plot(mask_on[:trim])
+#     ax.set_ylabel("Note-on Mask")
+#     ax.set_xlabel("Time step [frame]")
+#     ax.legend(["Threshold", "Likelihood", "Mask"])
 
-ax = axes[0 + has_mask]
-ax.plot(audio_features["loudness_db"][:TRIM])
-ax.plot(audio_features_mod["loudness_db"][:TRIM])
-ax.set_ylabel("loudness_db")
-ax.legend(["Original", "Adjusted"])
+# ax = axes[0 + has_mask]
+# ax.plot(audio_features["loudness_db"][:trim])
+# ax.plot(audio_features_mod["loudness_db"][:trim])
+# ax.set_ylabel("loudness_db")
+# ax.legend(["Original", "Adjusted"])
 
-ax = axes[1 + has_mask]
-ax.plot(librosa.hz_to_midi(audio_features["f0_hz"][:TRIM]))
-ax.plot(librosa.hz_to_midi(audio_features_mod["f0_hz"][:TRIM]))
-ax.set_ylabel("f0 [midi]")
-_ = ax.legend(["Original", "Adjusted"])
-
-# @title #Resynthesize Audio
+# ax = axes[1 + has_mask]
+# ax.plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
+# ax.plot(librosa.hz_to_midi(audio_features_mod["f0_hz"][:trim]))
+# ax.set_ylabel("f0 [midi]")
+# _ = ax.legend(["Original", "Adjusted"])
+# plt.show()
+# plt.close()
 
 af = audio_features if audio_features_mod is None else audio_features_mod
 
@@ -267,16 +257,25 @@ start_time = time.time()
 audio_gen = model(af, training=False)
 print("Prediction took %.1f seconds" % (time.time() - start_time))
 
-# Plot
-print("Original")
-play(audio)
-
 print("Resynthesis")
-play(audio_gen)
+# If batched, take first element.
+if len(audio_gen.shape) == 2:
+    audio_gen = audio_gen[0]
+audio_gen = np.asarray(audio_gen)
 
-specplot(audio)
-plt.title("Original")
+print(audio.min(), audio.mean(), audio.max(), audio.shape)
+print(audio_gen.min(), audio_gen.mean(), audio_gen.max(), audio_gen.shape)
+fig, ax = plt.subplots(2, 1)
+librosa.display.specshow(
+    librosa.power_to_db(librosa.feature.melspectrogram(y=audio.squeeze(), sr=args.sr), ref=np.max), ax=ax[0]
+)
+librosa.display.specshow(
+    librosa.power_to_db(librosa.feature.melspectrogram(y=audio_gen, sr=args.sr), ref=np.max), ax=ax[1]
+)
+plt.show()
+plt.close()
 
-specplot(audio_gen)
-_ = plt.title("Resynthesis")
-
+normalizer = float(np.iinfo(np.int16).max)
+array_of_ints = np.array(audio_gen * normalizer, dtype=np.int16)
+output_name = args.audio.split("/")[-1].split(".")[0] + "_" + args.ckpt.split("/")[-1] + ".wav"
+wavfile.write(output_name, args.sr, array_of_ints)
