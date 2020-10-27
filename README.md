@@ -5,7 +5,7 @@ python distortion_test.py \
 ```
 
 ```
-python ddsp_prepare_data.py \
+python prepare_data.py \
   --audio_dir AUDIO_DIR \
   --save_dir SAVE_DIR \
   --sr SR \
