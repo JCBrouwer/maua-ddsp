@@ -18,7 +18,7 @@ python train.py \
   --data_dir DATA_DIR \
   --save_dir SAVE_DIR \
   --restore_dir RESTORE_DIR \
-  --model MODEL \
+  --model MODEL # see models.py \
   --embedding_loss # only if using 1 GPU \
   --train_steps TRAIN_STEPS \
   --steps_per_save STEPS_PER_SAVE \
