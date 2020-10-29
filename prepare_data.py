@@ -19,6 +19,9 @@ import os
 
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "1"
 import tensorflow as tf
+import warnings
+
+warnings.filterwarnings("ignore", message="divide by zero encountered in log10")
 
 from ddsp.colab import colab_utils
 import ddsp.training
@@ -28,7 +31,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument("--audio_dir", type=str, required=True)
 parser.add_argument("--save_dir", type=str, required=True)
 parser.add_argument("--sr", type=int, default=16000)
-parser.add_argument("--frame_rate", type=float, default=250)
+parser.add_argument("--frame_rate", type=int, default=250)
 parser.add_argument("--example_secs", type=float, default=4)
 args = parser.parse_args()
 
