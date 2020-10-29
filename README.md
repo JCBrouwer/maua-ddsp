@@ -18,8 +18,9 @@ python train.py \
   --data_dir DATA_DIR \
   --save_dir SAVE_DIR \
   --restore_dir RESTORE_DIR \
-  --model MODEL # see models.py \
-  --embedding_loss # only if using 1 GPU \
+  --model MODEL  # see models.py \
+  --gin_file GIN_FILE  # only used if model == "gin" \
+  --embedding_loss  # only if using 1 GPU \
   --train_steps TRAIN_STEPS \
   --steps_per_save STEPS_PER_SAVE \
   --steps_per_summary STEPS_PER_SUMMARY \
@@ -33,12 +34,13 @@ python train.py \
 python timbre_transfer.py \
   --audio AUDIO \
   --ckpt CKPT \
-  --model MODEL # "gin" or from models.py \
+  --model MODEL  # "gin" or from models.py \
   --sr SR \
-  --no_adjust # usually want to adjust \
+  --no_adjust  # usually want to adjust \
   --threshold THRESHOLD \
   --quiet QUIET \
   --autotune AUTOTUNE \
   --pitch_shift PITCH_SHIFT \
-  --loudness_shift LOUDNESS_SHIFT
+  --loudness_shift LOUDNESS_SHIFT \
+  --plot
 ```
