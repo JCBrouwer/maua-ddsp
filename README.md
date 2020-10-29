@@ -1,4 +1,17 @@
 ```
+conda env create -f env.yaml
+conda activate ddsp
+
+pip install ddsp
+
+# or if you want to tinker within ddsp
+
+git clone https://github.com/magenta/ddsp.git ddsp_src
+mv ddsp_src/ddsp ./
+rm -rf ddsp_src/
+```
+
+```
 python distortion_test.py \
   --audio AUDIO \
   --sr SR
