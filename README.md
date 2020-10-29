@@ -33,6 +33,7 @@ python train.py \
 python timbre_transfer.py \
   --audio AUDIO \
   --ckpt CKPT \
+  --model MODEL # "gin" or from models.py \
   --sr SR \
   --no_adjust # usually want to adjust \
   --threshold THRESHOLD \
