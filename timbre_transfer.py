@@ -44,6 +44,7 @@ import models
 parser = argparse.ArgumentParser()
 parser.add_argument("--audio", type=str, required=True)
 parser.add_argument("--ckpt", type=str, required=True)
+parser.add_argument("--model", type=str, required=True, choices=["gin", "Default", "SimpleDistortion", "NeuroBass"])
 parser.add_argument("--data_stats", type=str)
 parser.add_argument("--sr", type=int, default=DEFAULT_SAMPLE_RATE)
 parser.add_argument("--example_secs", type=int, default=4)
@@ -53,7 +54,7 @@ parser.add_argument("--quiet", type=float, default=30)  # 0 - 60
 parser.add_argument("--autotune", type=float, default=0)  # 0 - 1
 parser.add_argument("--pitch_shift", type=int, default=0)  # -2 - 2
 parser.add_argument("--loudness_shift", type=float, default=0)  # -20 - 20
-parser.add_argument("--plot", action="store_true")  # -20 - 20
+parser.add_argument("--plot", action="store_true")
 args = parser.parse_args()
 
 with open(args.audio, "rb") as f:
@@ -91,6 +92,7 @@ for root, dirs, filenames in os.walk("/".join(args.ckpt.split("/")[:-1])):
     for filename in filenames:
         if filename.endswith(".gin") and not filename.startswith("."):
             model_dir = root
+            gin_file = os.path.join(model_dir, filename)
             break
 
 # Load the dataset statistics.
@@ -100,33 +102,74 @@ if args.data_stats is not None:
     with open(args.data_stats, "rb") as f:
         dataset_stats = pickle.load(f)
 
-# Set up the model just to predict audio given new conditioning
-ckpt = args.ckpt
-print("Loading: ", ckpt)
-model = models.NeuroBass(sample_rate=args.sr, example_secs=args.example_secs)
-model.restore(ckpt)
+if args.model == "gin":
+    import gin
 
-# Ensure dimensions and sampling rates are equal
-time_steps_train = model.preprocessor.time_steps
-n_samples_train = args.example_secs * args.sr
-hop_size = int(n_samples_train / time_steps_train)
-time_steps = int(audio.shape[1] / hop_size)
-n_samples = time_steps * hop_size
+    # Parse gin config,
+    with gin.unlock_config():
+        gin.parse_config_file(gin_file, skip_unknown=True)
 
-print()
-print("===Trained model===")
-print("Time Steps", time_steps_train)
-print("Samples", n_samples_train)
-print("Hop Size", hop_size)
-print("\n===Resynthesis===")
-print("Time Steps", time_steps)
-print("Samples", n_samples)
-print()
+    time_steps_train = gin.query_parameter("DefaultPreprocessor.time_steps")
+    n_samples_train = gin.query_parameter("Additive.n_samples")
+    hop_size = int(n_samples_train / time_steps_train)
+    time_steps = int(audio.shape[1] / hop_size)
+    n_samples = time_steps * hop_size
 
-# Trim all input vectors to correct lengths
-for key in ["f0_hz", "f0_confidence", "loudness_db"]:
-    audio_features[key] = audio_features[key][:time_steps]
-audio_features["audio"] = audio_features["audio"][:, :n_samples]
+    print()
+    print("===Trained model===")
+    print("Time Steps", time_steps_train)
+    print("Samples", n_samples_train)
+    print("Hop Size", hop_size)
+    print("\n===Resynthesis===")
+    print("Time Steps", time_steps)
+    print("Samples", n_samples)
+    print()
+
+    gin_params = [
+        "Additive.n_samples = {}".format(n_samples),
+        "FilteredNoise.n_samples = {}".format(n_samples),
+        "DefaultPreprocessor.time_steps = {}".format(time_steps),
+        "oscillator_bank.use_angular_cumsum = True",  # Avoids cumsum accumulation errors.
+    ]
+
+    with gin.unlock_config():
+        gin.parse_config(gin_params)
+
+    # Trim all input vectors to correct lengths
+    for key in ["f0_hz", "f0_confidence", "loudness_db"]:
+        audio_features[key] = audio_features[key][:time_steps]
+    audio_features["audio"] = audio_features["audio"][:, :n_samples]
+
+    # Set up the model just to predict audio given new conditioning
+    print("Loading: ", args.ckpt)
+    model = ddsp.training.models.Autoencoder()
+    model.restore(args.ckpt)
+else:
+    print("Loading: ", args.ckpt)
+    model = models.__dict__[args.model](sample_rate=args.sr, example_secs=args.example_secs)
+    model.restore(args.ckpt)
+
+    # Ensure dimensions and sampling rates are equal
+    time_steps_train = model.preprocessor.time_steps
+    n_samples_train = args.example_secs * args.sr
+    hop_size = int(n_samples_train / time_steps_train)
+    time_steps = int(audio.shape[1] / hop_size)
+    n_samples = time_steps * hop_size
+
+    print()
+    print("===Trained model===")
+    print("Time Steps", time_steps_train)
+    print("Samples", n_samples_train)
+    print("Hop Size", hop_size)
+    print("\n===Resynthesis===")
+    print("Time Steps", time_steps)
+    print("Samples", n_samples)
+    print()
+
+    # Trim all input vectors to correct lengths
+    for key in ["f0_hz", "f0_confidence", "loudness_db"]:
+        audio_features[key] = audio_features[key][:time_steps]
+    audio_features["audio"] = audio_features["audio"][:, :n_samples]
 
 # Build model by running a batch through it.
 start_time = time.time()
@@ -252,5 +295,18 @@ if args.plot:
 
 normalizer = float(np.iinfo(np.int16).max)
 array_of_ints = np.array(audio_gen * normalizer, dtype=np.int16)
-output_name = args.audio.split("/")[-1].split(".")[0] + "_" + args.ckpt.split("/")[-1] + ".wav"
+
+output_name = "_".join(
+    [
+        args.audio.split("/")[-1].split(".")[0],
+        args.ckpt.split("/")[-2],
+        args.ckpt.split("/")[-1].replace("ckpt-", ""),
+        f"thresh{args.threshold:.2f}",
+        f"quiet{int(args.quiet)}",
+        f"tune{args.autotune:.2f}",
+        f"pitch{int(args.pitch_shift)}",
+        f"loud{int(args.loudness_shift)}",
+        ".wav",
+    ]
+)
 wavfile.write(output_name, args.sr, array_of_ints)
