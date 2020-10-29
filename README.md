@@ -5,7 +5,7 @@ python distortion_test.py \
 ```
 
 ```
-python ddsp_prepare_data.py \
+python prepare_data.py \
   --audio_dir AUDIO_DIR \
   --save_dir SAVE_DIR \
   --sr SR \
@@ -18,7 +18,7 @@ python train.py \
   --data_dir DATA_DIR \
   --save_dir SAVE_DIR \
   --restore_dir RESTORE_DIR \
-  --model MODEL \
+  --model MODEL # see models.py \
   --embedding_loss # only if using 1 GPU \
   --train_steps TRAIN_STEPS \
   --steps_per_save STEPS_PER_SAVE \
@@ -34,7 +34,7 @@ python timbre_transfer.py \
   --audio AUDIO \
   --ckpt CKPT \
   --sr SR \
-  --no_adjust \
+  --no_adjust # usually want to adjust \
   --threshold THRESHOLD \
   --quiet QUIET \
   --autotune AUTOTUNE \
