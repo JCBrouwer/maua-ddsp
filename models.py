@@ -34,9 +34,9 @@ class Default(ddsp.training.models.Autoencoder):
                 output_splits=(("amps", 1), ("harmonic_distribution", 100), ("noise_magnitudes", 65)),
             )
 
-        losses = [ddsp.losses.SpectralLoss(loss_type="L1", mag_weight=1.0, logmag_weight=1.0)]
+        losses = [ddsp.losses.SpectralLoss(loss_type="L1", mag_weight=1.0, logmag_weight=0.1)]
         if embedding_loss:
-            losses += [ddsp.losses.PretrainedCREPEEmbeddingLoss(weight=0.3)]
+            losses += [ddsp.losses.PretrainedCREPEEmbeddingLoss(weight=0.1)]
 
         if processor_group is None:
             additive = ddsp.synths.Additive(

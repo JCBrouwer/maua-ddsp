@@ -73,19 +73,6 @@ audio_features_mod = None
 print("Audio features took %.1f seconds" % (time.time() - start_time))
 
 trim = -15
-if args.plot:
-    fig, ax = plt.subplots(nrows=3, ncols=1, sharex=True, figsize=(6, 8))
-    ax[0].plot(audio_features["loudness_db"][:trim])
-    ax[0].set_ylabel("loudness_db")
-
-    ax[1].plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
-    ax[1].set_ylabel("f0 [midi]")
-
-    ax[2].plot(audio_features["f0_confidence"][:trim])
-    ax[2].set_ylabel("f0 confidence")
-    _ = ax[2].set_xlabel("Time step [frame]")
-    plt.show()
-    plt.close()
 
 # Iterate through directories until model directory is found
 for root, dirs, filenames in os.walk("/".join(args.ckpt.split("/")[:-1])):
@@ -240,35 +227,6 @@ else:
 audio_features_mod = shift_ld(audio_features_mod, args.loudness_shift)
 audio_features_mod = shift_f0(audio_features_mod, args.pitch_shift)
 
-# Plot Features.
-if args.plot:
-    has_mask = int(mask_on is not None)
-    n_plots = 3 if has_mask else 2
-    fig, axes = plt.subplots(nrows=n_plots, ncols=1, sharex=True, figsize=(2 * n_plots, 8))
-
-    if has_mask:
-        ax = axes[0]
-        ax.plot(np.ones_like(mask_on[:trim]) * args.threshold, "k:")
-        ax.plot(note_on_value[:trim])
-        ax.plot(mask_on[:trim])
-        ax.set_ylabel("Note-on Mask")
-        ax.set_xlabel("Time step [frame]")
-        ax.legend(["Threshold", "Likelihood", "Mask"])
-
-    ax = axes[0 + has_mask]
-    ax.plot(audio_features["loudness_db"][:trim])
-    ax.plot(audio_features_mod["loudness_db"][:trim])
-    ax.set_ylabel("loudness_db")
-    ax.legend(["Original", "Adjusted"])
-
-    ax = axes[1 + has_mask]
-    ax.plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
-    ax.plot(librosa.hz_to_midi(audio_features_mod["f0_hz"][:trim]))
-    ax.set_ylabel("f0 [midi]")
-    _ = ax.legend(["Original", "Adjusted"])
-    plt.show()
-    plt.close()
-
 af = audio_features if audio_features_mod is None else audio_features_mod
 
 # Run a batch of predictions.
@@ -282,13 +240,44 @@ if len(audio_gen.shape) == 2:
     audio_gen = audio_gen[0]
 audio_gen = np.asarray(audio_gen)
 
+# Plot Features.
 if args.plot:
-    fig, ax = plt.subplots(2, 1)
+    fig, ax = plt.subplots(nrows=3, ncols=3, sharex=True, figsize=(18, 8))
+    ax[0, 0].plot(audio_features["loudness_db"][:trim])
+    ax[0, 0].set_ylabel("loudness_db")
+
+    ax[1, 0].plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
+    ax[1, 0].set_ylabel("f0 [midi]")
+
+    ax[2, 0].plot(audio_features["f0_confidence"][:trim])
+    ax[2, 0].set_ylabel("f0 confidence")
+    _ = ax[2, 0].set_xlabel("Time step [frame]")
+
+    has_mask = int(mask_on is not None)
+
+    ax[0, 1].plot(audio_features["loudness_db"][:trim])
+    ax[0, 1].plot(audio_features_mod["loudness_db"][:trim])
+    ax[0, 1].set_ylabel("loudness_db")
+    ax[0, 1].legend(["Original", "Adjusted"])
+
+    if has_mask:
+        ax[1, 1].plot(np.ones_like(mask_on[:trim]) * args.threshold, "k:")
+        ax[1, 1].plot(note_on_value[:trim])
+        ax[1, 1].plot(mask_on[:trim])
+        ax[1, 1].set_ylabel("Note-on Mask")
+        ax[1, 1].set_xlabel("Time step [frame]")
+        ax[1, 1].legend(["Threshold", "Likelihood", "Mask"])
+
+    ax[1 + has_mask, 1].plot(librosa.hz_to_midi(audio_features["f0_hz"][:trim]))
+    ax[1 + has_mask, 1].plot(librosa.hz_to_midi(audio_features_mod["f0_hz"][:trim]))
+    ax[1 + has_mask, 1].set_ylabel("f0 [midi]")
+    _ = ax[1 + has_mask, 1].legend(["Original", "Adjusted"])
+
     librosa.display.specshow(
-        librosa.power_to_db(librosa.feature.melspectrogram(y=audio.squeeze(), sr=args.sr), ref=np.max), ax=ax[0]
+        librosa.power_to_db(librosa.feature.melspectrogram(y=audio.squeeze(), sr=args.sr), ref=np.max), ax=ax[0, 2]
     )
     librosa.display.specshow(
-        librosa.power_to_db(librosa.feature.melspectrogram(y=audio_gen, sr=args.sr), ref=np.max), ax=ax[1]
+        librosa.power_to_db(librosa.feature.melspectrogram(y=audio_gen, sr=args.sr), ref=np.max), ax=ax[1, 2]
     )
     plt.show()
     plt.close()
@@ -309,4 +298,5 @@ output_name = "_".join(
         ".wav",
     ]
 )
-wavfile.write(output_name, args.sr, array_of_ints)
+wavfile.write("output/" + output_name, args.sr, array_of_ints)
+
