@@ -1,10 +1,11 @@
 import ddsp
 import ddsp.training
+from ddsp.training.models import Autoencoder
 
 from distortion import Distortion
 
 
-class Default(ddsp.training.models.Autoencoder):
+class Default(Autoencoder):
     def __init__(
         self,
         sample_rate,
