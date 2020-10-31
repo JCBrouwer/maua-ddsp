@@ -126,18 +126,19 @@ class GrainEncoder(Encoder):
     def compute_z(self, conditioning):
         """Takes in conditioning dictionary, returns a latent tensor z."""
         audio = conditioning["audio"]
-        batch, n_samples, unit = audio.shape
+        batch, n_samples = audio.shape
 
         # extract overlapping grains
         stride = self.grain_size * (1 - self.overlap)
         grain_sequence = tf.image.extract_patches(
-            audio[..., None],
+            audio[..., None, None],
             sizes=[1, self.grain_size, 1, 1],
             strides=[1, stride, 1, 1],
             rates=[1, 1, 1, 1],
             padding="VALID",
         )
         num_grains = grain_sequence.shape[1]
+        # print(num_grains)
         grain_sequence = tf.reshape(grain_sequence, [batch * num_grains, self.grain_size, 1])
 
         # TODO make sure overlapping grain_envelopes sum to 1 at all times?
@@ -173,7 +174,7 @@ class GrainDecoder(Decoder):
         self,
         ch=512,
         layers_per_stack=3,
-        input_keys=("z",),
+        input_keys=("z",),  # ("ld_scaled", "f0_scaled", "z",),
         output_splits=(("noise_magnitudes", 513),),  # grain_size / 2 + 1
         name="grain_decoder",
     ):
@@ -188,7 +189,9 @@ class GrainDecoder(Decoder):
     def decode(self, conditioning):
         """Takes in conditioning dictionary, returns dictionary of signals."""
         inputs = [conditioning[k] for k in self.input_keys]
+        # [print(k, conditioning[k].shape) for k in self.input_keys]
         x = [stack(x) for stack, x in zip(self.input_stacks, inputs)]
+        # [print(k, x.shape) for x, k in zip(x, self.input_keys)]
         x = tf.concat(inputs + x, axis=-1)
         x = self.out_stack(x)
         return self.dense_out(x)
@@ -199,7 +202,7 @@ def kl_divergence(mu, logvar):
 
 
 class NeuroGranular(Autoencoder):
-    def __init__(self, grain_size, overlap, sample_rate, example_secs, embedding_loss=False, name="granular"):
+    def __init__(self, sample_rate, example_secs, grain_size=1024, overlap=0.75, embedding_loss=False, name="granular"):
         encoder = GrainEncoder()
         decoder = GrainDecoder(output_splits=(("noise_magnitudes", int(grain_size / 2 + 1)),))
 
@@ -215,7 +218,7 @@ class NeuroGranular(Autoencoder):
             losses += [ddsp.losses.PretrainedCREPEEmbeddingLoss(weight=0.1)]
 
         super(NeuroGranular, self).__init__(
-            preprocessor=None,
+            preprocessor=None,  # ddsp.training.preprocessing.DefaultPreprocessor(time_steps=grain_size),
             encoder=encoder,
             decoder=decoder,
             processor_group=processor_group,
@@ -266,13 +269,17 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--audio", type=str, required=True)
+    parser.add_argument("--example_secs", type=int, default=None)
     parser.add_argument("--batch", type=int, default=12)
     parser.add_argument("--grain_size", type=int, default=1024)
     parser.add_argument("--overlap", type=float, default=0.75)
     args = parser.parse_args()
 
     sr, audio = wavfile.read(args.audio)
-    audio = audio[None, : int(audio.shape[0] // args.grain_size) * args.grain_size, None].astype(np.float32)
+    if args.example_secs:
+        audio = audio[None, : args.example_secs * sr].astype(np.float32)
+    else:
+        audio = audio[None, : int(audio.shape[0] // args.grain_size) * args.grain_size].astype(np.float32)
     audio = audio / np.max([audio.max(), np.abs(audio.min())])
     audio = np.concatenate([audio] * args.batch, axis=0)
     print("audio shape: ", audio.shape)
@@ -282,7 +289,9 @@ if __name__ == "__main__":
     z = granulator.encoder.compute_z({"audio": audio})
     print("latent shape: ", z.shape)
 
-    controls = granulator.decoder.decode({"z": z})
+    controls = granulator.decoder.decode(
+        {"z": z, "ld_scaled": tf.ones((args.batch, 40, 1)), "f0_scaled": tf.ones((args.batch, 40, 1))}
+    )
     print("controls shape: ", controls.shape)
 
     audio_grains = granulator.processor_group({"noise_magnitudes": controls})

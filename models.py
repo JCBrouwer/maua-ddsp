@@ -3,6 +3,7 @@ import ddsp.training
 from ddsp.training.models import Autoencoder
 
 from distortion import Distortion
+from granular import NeuroGranular
 
 
 class Default(Autoencoder):
