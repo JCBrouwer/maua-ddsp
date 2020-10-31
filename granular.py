@@ -201,7 +201,7 @@ def kl_divergence(mu, logvar):
 class NeuroGranular(Autoencoder):
     def __init__(self, grain_size, overlap, sample_rate, example_secs, embedding_loss=False, name="granular"):
         encoder = GrainEncoder()
-        decoder = GrainDecoder(output_splits=(("noise_magnitudes", grain_size / 2 + 1)))
+        decoder = GrainDecoder(output_splits=(("noise_magnitudes", int(grain_size / 2 + 1)),))
 
         noise = ddsp.synths.FilteredNoise(n_samples=grain_size, window_size=0, scale_fn=exp_sigmoid)
         processor_group = ddsp.processors.ProcessorGroup(dag=[(noise, ["noise_magnitudes"])])
@@ -262,17 +262,22 @@ class NeuroGranular(Autoencoder):
 
 
 if __name__ == "__main__":
-    batch = 12
-    grain_size = 1024
-    overlap = 0.75
+    import argparse
 
-    sr, audio = wavfile.read("/home/hans/datasets/music-samples/test3/fedefadaeaSSURBEEALIKFFGARHONPRU.wav")
-    audio = audio[None, : int(audio.shape[0] // grain_size) * grain_size, None].astype(np.float32)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--audio", type=str, required=True)
+    parser.add_argument("--batch", type=int, default=12)
+    parser.add_argument("--grain_size", type=int, default=1024)
+    parser.add_argument("--overlap", type=float, default=0.75)
+    args = parser.parse_args()
+
+    sr, audio = wavfile.read(args.audio)
+    audio = audio[None, : int(audio.shape[0] // args.grain_size) * args.grain_size, None].astype(np.float32)
     audio = audio / np.max([audio.max(), np.abs(audio.min())])
-    audio = np.concatenate([audio] * batch, axis=0)
+    audio = np.concatenate([audio] * args.batch, axis=0)
     print("audio shape: ", audio.shape)
 
-    granulator = NeuroGranular(grain_size=grain_size, overlap=overlap, sample_rate=16000, example_secs=2.56)
+    granulator = NeuroGranular(grain_size=args.grain_size, overlap=args.overlap, sample_rate=16000, example_secs=2.56)
 
     z = granulator.encoder.compute_z({"audio": audio})
     print("latent shape: ", z.shape)
@@ -282,8 +287,8 @@ if __name__ == "__main__":
 
     audio_grains = granulator.processor_group({"noise_magnitudes": controls})
     print("grains output: ", audio_grains.shape)
-    num_grains = int(audio_grains.shape[0] / batch)
-    audio_grains = tf.reshape(audio_grains, [batch, num_grains, grain_size])
+    num_grains = int(audio_grains.shape[0] / args.batch)
+    audio_grains = tf.reshape(audio_grains, [args.batch, num_grains, args.grain_size])
     print("grains reshaped: ", audio_grains.shape)
 
     signal = granulator._overlap_add(audio_grains)
@@ -291,7 +296,6 @@ if __name__ == "__main__":
 
     audio_gen = granulator.postprocess(signal[..., None])
 
-    print("losses")
     print(
         "spectral_loss:",
         ddsp.losses.SpectralLoss(
