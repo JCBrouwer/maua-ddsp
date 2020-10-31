@@ -116,6 +116,9 @@ class GrainEncoder(Encoder):
         self.fc_mu = nn.fc(self.latent_dim)
         self.fc_logvar = nn.fc(self.latent_dim)
 
+        self.mu = None
+        self.logvar = None
+
     def _flat_size(self):
         output = self.resnet(tf.ones((1, self.grain_size, 1)))
         return int(np.prod(output.shape[1:]))
@@ -132,7 +135,7 @@ class GrainEncoder(Encoder):
             sizes=[1, self.grain_size, 1, 1],
             strides=[1, stride, 1, 1],
             rates=[1, 1, 1, 1],
-            padding="SAME",
+            padding="VALID",
         )
         num_grains = grain_sequence.shape[1]
         grain_sequence = tf.reshape(grain_sequence, [batch * num_grains, self.grain_size, 1])
@@ -150,15 +153,14 @@ class GrainEncoder(Encoder):
 
         h = self.resnet(grain_sequence)
         h2 = self.fc(tf.reshape(h, [batch * num_grains, self.flat_size]))
-        mu = self.fc_mu(h2)
-        logvar = self.fc_logvar(h2)
+        self.mu = self.fc_mu(h2)
+        self.logvar = self.fc_logvar(h2)
 
-        sigma = tf.sqrt(tf.exp(logvar))
+        sigma = tf.sqrt(tf.exp(self.logvar))
         eps = tfp.distributions.Normal(0, 1).sample(sample_shape=sigma.shape)
-        z = mu + sigma * eps  # reparamaterization trick
+        z = self.mu + sigma * eps  # reparamaterization trick
 
-        z_seq = tf.reshape(z, [batch, num_grains, self.latent_dim])
-        return z_seq
+        return z
 
 
 class GrainDecoder(Decoder):
@@ -192,12 +194,16 @@ class GrainDecoder(Decoder):
         return self.dense_out(x)
 
 
-class NeuroGranular(Autoencoder):
-    def __init__(self, sample_rate, example_secs, embedding_loss=False, name="granular"):
-        encoder = GrainEncoder()
-        decoder = GrainDecoder()
+def kl_divergence(mu, logvar):
+    return 0.5 * tf.reduce_sum(tf.exp(logvar) + tf.pow(mu, 2) - 1.0 - logvar)
 
-        noise = ddsp.synths.FilteredNoise(n_samples=example_secs * sample_rate, window_size=0, scale_fn=exp_sigmoid)
+
+class NeuroGranular(Autoencoder):
+    def __init__(self, grain_size, overlap, sample_rate, example_secs, embedding_loss=False, name="granular"):
+        encoder = GrainEncoder()
+        decoder = GrainDecoder(output_splits=(("noise_magnitudes", grain_size / 2 + 1)))
+
+        noise = ddsp.synths.FilteredNoise(n_samples=grain_size, window_size=0, scale_fn=exp_sigmoid)
         processor_group = ddsp.processors.ProcessorGroup(dag=[(noise, ["noise_magnitudes"])])
 
         losses = [
@@ -217,53 +223,81 @@ class NeuroGranular(Autoencoder):
             name=name,
         )
 
+        self.overlap = overlap
+        self.grain_size = grain_size
+
+        self.encoder = encoder
+        self.postprocess = tfkl.Conv1D(filters=64, kernel_size=512, strides=1, padding="same", name="postprocess")
+
+    def _overlap_add(self, grains):
+        # sum grains with overlap into full waveform
+        frame_step = int(self.grain_size * (1 - self.overlap))
+        signal = tf.signal.overlap_and_add(grains, frame_step, name="overlap_add")
+        return signal
+
+    def _calculate_losses(self, audio, audio_gen):
+        for loss_obj in self.loss_objs:
+            loss = loss_obj(audio, audio_gen)
+            self._losses_dict[loss_obj.name] = loss
+        self._losses_dict["kl_divergence"] = kl_divergence(self.encoder.mu, self.encoder.logvar)
+        return self._losses_dict
+
     def call(self, features, training=True):
         """Run the core of the network, get predictions and loss."""
         conditioning = self.encode(features, training=training)
         audio_grains = self.decode(conditioning, training=training)
 
-        batch, num_grains, grain_size = audio_grains.shape
+        num_grains = int(audio_grains.shape[0] / batch)
+        audio_grains = tf.reshape(audio_grains, [batch, num_grains, grain_size])
 
-        # sum grains with overlap into full waveform
-        stride = grain_size * (1 - self.overlap)
-        signal = tf.zeros((batch, num_grains * stride))
-        for i, grain in enumerate(grains):
-            signal[i * stride : (i + 1) * stride] += grain  # TODO do grains need to be normalized to always sum to 1?
+        signal = self._overlap_add(audio_grains)
 
         # multi-channel temporal convolution that learns a parallel set of time-invariant FIR filters
         # and improves the audio quality of the assembled signal
-        audio_gen = tfkl.Conv1D(64, 512, 1, padding="same", name="postprocess")(signal)
+        audio_gen = self.postprocess(signal[..., None])
 
         if training:
-            for loss_obj in self.loss_objs:
-                loss = loss_obj(features["audio"], audio_gen)
-                self._losses_dict[loss_obj.name] = loss
+            self._calculate_losses(features["audio"], audio_gen)
         return audio_gen
 
 
 if __name__ == "__main__":
+    batch = 12
+    grain_size = 1024
+    overlap = 0.75
+
     sr, audio = wavfile.read("/home/hans/datasets/music-samples/test3/fedefadaeaSSURBEEALIKFFGARHONPRU.wav")
-    audio = audio[None, : int(audio.shape[0] // 1024) * 1024, None].astype(np.float32)
+    audio = audio[None, : int(audio.shape[0] // grain_size) * grain_size, None].astype(np.float32)
     audio = audio / np.max([audio.max(), np.abs(audio.min())])
-    audio = np.concatenate([audio] * 40, axis=0)
+    audio = np.concatenate([audio] * batch, axis=0)
     print("audio shape: ", audio.shape)
 
-    encoder = GrainEncoder()
-    z = encoder.compute_z({"audio": audio})
+    granulator = NeuroGranular(grain_size=grain_size, overlap=overlap, sample_rate=16000, example_secs=2.56)
+
+    z = granulator.encoder.compute_z({"audio": audio})
     print("latent shape: ", z.shape)
 
-    decoder = GrainDecoder()
-    controls = decoder.decode({"z": z})
+    controls = granulator.decoder.decode({"z": z})
     print("controls shape: ", controls.shape)
 
-    noise = ddsp.synths.FilteredNoise(n_samples=40960, window_size=0, scale_fn=exp_sigmoid)
-    processor_group = ddsp.processors.ProcessorGroup(
-        dag=[
-            (noise, ["noise_magnitudes"]),
-            (OverlapAdd(), ["filtered_noise/signal"]),
-            (ddsp.effects.FIRFilter(window_size=512, trainable=True), ["overlap_add/signal"]),
-        ]
-    )
-    output = processor_group(controls)
-    print("output: ", output.shape)
+    audio_grains = granulator.processor_group({"noise_magnitudes": controls})
+    print("grains output: ", audio_grains.shape)
+    num_grains = int(audio_grains.shape[0] / batch)
+    audio_grains = tf.reshape(audio_grains, [batch, num_grains, grain_size])
+    print("grains reshaped: ", audio_grains.shape)
 
+    signal = granulator._overlap_add(audio_grains)
+    print("waveform output: ", signal.shape)
+
+    audio_gen = granulator.postprocess(signal[..., None])
+
+    print("losses")
+    print(
+        "spectral_loss:",
+        ddsp.losses.SpectralLoss(
+            loss_type="L1", fft_sizes=(1024, 512, 256, 128, 64, 32), mag_weight=1.0, logmag_weight=1.0
+        )(audio, audio_gen),
+    )
+    print("kl_divergence:", tf.reduce_mean(kl_divergence(granulator.encoder.mu, granulator.encoder.logvar)))
+
+    granulator({"audio": audio})
